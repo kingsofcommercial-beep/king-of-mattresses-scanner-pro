@@ -26,6 +26,7 @@ label{display:block;color:var(--muted);font-size:12px;margin:10px 0 5px}
 .subcodes{color:var(--muted);font-size:12px;margin-top:7px;line-height:1.6}.itembuttons{display:flex;gap:6px;margin-top:9px}.itembuttons button{padding:7px 10px;font-size:12px}
 .empty{color:var(--muted);text-align:center;padding:18px 4px}.status{color:var(--green);font-size:13px;min-height:18px;margin-top:8px}
 .status-error{color:var(--red);font-size:13px;min-height:18px;margin-top:8px}
+.validation{border:1px solid var(--line);border-radius:12px;padding:12px;background:#0d1727;margin-top:10px}.validation strong{display:block;margin-bottom:5px}.validation small{color:var(--muted);line-height:1.5}
 footer{text-align:center;color:var(--muted);font-size:11px;padding:4px 16px 28px}
 @media(max-width:420px){.stats{gap:6px}.stat{padding:9px}.stat strong{font-size:20px}.panel{padding:13px}}
 
@@ -43,6 +44,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:4px 16px 28px
  <video id="reader" playsinline muted hidden></video>
  <div id="fallbackReader" hidden></div>
  <div class="status" id="cameraStatus">A câmera será solicitada quando você tocar em “Abrir câmera”.</div>
+ <div class="validation"><strong>Validação automática</strong><small>20 dígitos obrigatórios · 10 primeiros = SKU · 10 últimos = unidade · SKU precisa existir no catálogo · código repetido é rejeitado.</small></div>
  <p class="note">Enquadre o código de barras correto (inferior). Todo código com exatamente 13 dígitos é bloqueado. Duplicatas do código completo emitem alerta de erro.</p>
 </section>
 <section class="panel">
@@ -57,7 +59,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:4px 16px 28px
   <div class="stat"><small>Produtos agrupados</small><strong id="families">0</strong></div>
   <div class="stat"><small>Códigos diferentes</small><strong id="codes">0</strong></div>
  </div>
- <p class="note">Regra ativa: 10 primeiros dígitos identificam o produto; os demais identificam a unidade. Códigos com 13 dígitos são bloqueados.</p>
+ <p class="note">Regra ativa: código principal com exatamente 20 dígitos. Os 10 primeiros identificam o produto e os 10 últimos identificam a unidade física. EAN de 13 dígitos é rejeitado.</p>
 </section>
 <section class="panel">
  <h2>4. Produtos contados</h2>
@@ -90,15 +92,17 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:4px 16px 28px
 
 <section class="modal" id="productModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
  <div class="modalbox">
-  <h2 id="modalTitle">Cadastrar produto não identificado</h2>
-  <p>O código foi lido, mas este SKU ainda não está cadastrado. Confira o código e informe o nome e a medida para registrar esta unidade.</p>
-  <label for="newSku">SKU (10 primeiros dígitos)</label><input id="newSku" readonly>
-  <label for="newName">Nome do produto</label><input id="newName" placeholder="Ex.: PROT IMPERM 30 CM 18" autocomplete="off">
-  <label for="newMeasure">Medida</label><input id="newMeasure" placeholder="Ex.: 30 x 200 x 160 cm" autocomplete="off">
-  <label for="newLot">Lote da unidade</label><input id="newLot" placeholder="Ex.: 0114432" inputmode="numeric" autocomplete="off">
-  <label for="newManufactureDate">Data de fabricação</label><input id="newManufactureDate" type="date">
-  <p class="note">O código completo de 20 dígitos será preservado. Lote e fabricação ficam associados à unidade lida.</p>
-  <div class="actions" style="margin-top:14px"><button id="saveNewProduct">Salvar cadastro e contabilizar</button><button class="secondary" id="cancelNewProduct">Cancelar leitura</button></div>
+  <h2 id="modalTitle">Conferir leitura antes de contabilizar</h2>
+  <p>Confira os dados identificados no catálogo. A unidade só será contabilizada após sua confirmação. Lote e fabricação podem ser informados agora.</p>
+  <label>SKU do produto</label><input id="newSku" readonly>
+  <label>Identificador da unidade</label><input id="newSerial" readonly>
+  <label>Código principal completo</label><input id="newFullCode" readonly>
+  <label>Produto identificado</label><input id="newName" readonly>
+  <label>Medidas</label><input id="newMeasure" readonly>
+  <label for="newLot">Lote da unidade (opcional)</label><input id="newLot" placeholder="Ex.: 0114432" inputmode="numeric" autocomplete="off">
+  <label for="newManufactureDate">Data de fabricação (opcional)</label><input id="newManufactureDate" type="date">
+  <p class="note">Nenhum produto novo será cadastrado por esta tela. SKU desconhecido ou código fora do padrão fica fora da contagem até conferência.</p>
+  <div class="actions" style="margin-top:14px"><button id="saveNewProduct">Confirmar e contabilizar 1 unidade</button><button class="secondary" id="cancelNewProduct">Cancelar leitura</button></div>
  </div>
 </section>
 
@@ -121,19 +125,26 @@ const SB_KEY_KEY='sb_key_v1';
 let supabaseClient=null;
 let pendingScan=null;
 
-const defaultRecords = {
-  "6050647026": {
-    serials: {
-      "187242300014": Date.now()
-    }
-  }
+// Catálogo-base validado a partir das etiquetas fornecidas.
+// O catálogo é separado da contagem e não é apagado ao zerar o inventário.
+const catalog = {
+ "4070959115":{name:"PROT IMPERM 30 CM 18",measure:"30 × 200 × 160 cm"},
+ "4070953983":{name:"TRAV VISCOPUR",measure:"14 × 40 × 60 cm"},
+ "4070950342":{name:"TRAV PRO LATEX",measure:"14 × 40 × 60 cm"},
+ "4070956022":{name:"TRAVESSEIRO ROYAL PILLOW",measure:"70 × 50 cm"},
+ "6090740048":{name:"TRAVESSEIRO FLOCK",measure:"14 × 70 × 50 cm"},
+ "4070959008":{name:"TRAV KING PREMIUM 17",measure:"70 × 50 cm"},
+ "4070959675":{name:"TRAV ANATOMIC VISCO ORTOBOM",measure:"12 × 52 × 38 cm"},
+ "6090740005":{name:"TRAVESSEIRO SONHO",measure:"12 × 40 × 60 cm"},
+ "4070959113":{name:"PROT IMPERM 30 CM 18",measure:"30 × 190 × 90 cm"},
+ "4070959114":{name:"PROT IMPERM 30 CM 18",measure:"30 × 190 × 140 cm"},
+ "4070956025":{name:"TRAV PRO LATEX GEL",measure:"14 × 40 × 60 cm"},
+ "4070955517":{name:"TRAVESSEIRO PLUMA DE GANSO",measure:"70 × 50 cm"},
+ "4070959112":{name:"PROT IMPERM INF 18",measure:"12 × 130 × 70 cm"},
+ "4070956071":{name:"TRAVESSEIRO SEIS ESTRELAS ROL",measure:"70 × 50 cm"}
 };
-const defaultMeta = {
-  "6050647026": {
-    name: "Protetor Impermeável Padrão",
-    measure: "Padrão / Conforme Etiqueta"
-  }
-};
+const defaultRecords = {};
+const defaultMeta = {...catalog};
 
 function playSuccessBeep() {
  try {
@@ -229,68 +240,57 @@ async function syncToCloud(){
 
 function processScannedCode(raw){
  const code=String(raw||'').trim().replace(/\s+/g,'');
- if(!code || !/^\d+$/.test(code) || code.length <= 10) {
-  playErrorBeep();
-  if(navigator.vibrate) navigator.vibrate([100,50,100]);
-  status('Código inválido. Informe um código numérico com mais de 10 dígitos.', true);
-  return;
+ if(!code || !/^\d+$/.test(code)){
+  playErrorBeep(); if(navigator.vibrate)navigator.vibrate([100,50,100]);
+  status('REJEITADO: o código deve conter somente números.',true);msg('Código inválido. Nenhuma unidade foi contabilizada.',true);return;
  }
- if(code.length === 13) {
-  playErrorBeep();
-  if(navigator.vibrate) navigator.vibrate([150,50,150]);
-  status('CÓDIGO NÃO ACEITO: etiqueta de 13 dígitos. Nenhuma contagem ou cadastro foi realizado.', true);
-  msg((code==='7896988316959'?'Código não aceito: ':'Código de 13 dígitos rejeitado: ') + code, true);
-  return;
+ if(code.length===13){
+  playErrorBeep();if(navigator.vibrate)navigator.vibrate([150,50,150]);
+  status('REJEITADO: EAN de 13 dígitos não é código de estoque.',true);msg('Código comercial ignorado: '+code,true);return;
  }
- const sku=code.slice(0,10), serial=code.slice(10);
- if(records[sku] && records[sku].serials && records[sku].serials[serial]) {
-  playErrorBeep();
-  if(navigator.vibrate) navigator.vibrate([150,100,150]);
-  status('ERRO: esta etiqueta completa já foi contabilizada!', true);
-  msg('Etiqueta duplicada rejeitada: ' + code, true);
-  return;
+ if(code.length!==20){
+  playErrorBeep();if(navigator.vibrate)navigator.vibrate([100,50,100]);
+  status('CONFERÊNCIA: código principal deve ter exatamente 20 dígitos. Recebidos: '+code.length+'.',true);
+  msg('Leitura não contabilizada. Confira a etiqueta: '+code,true);return;
  }
- if(!productsMeta[sku]) {
-  pendingScan={sku,serial,code};
-  $('newSku').value=sku;
-  const knownDefaults = sku==='4070959115';
-  $('newName').value=knownDefaults?'PROT IMPERM 30 CM 18':'';
-  $('newMeasure').value=knownDefaults?'30 × 200 × 160 cm':'';
-  $('newLot').value=knownDefaults?'0114432':'';
-  $('newManufactureDate').value=knownDefaults?'2026-07-06':'';
-  $('productModal').classList.add('open');$('newName').focus();
-  playErrorBeep();status('Produto não cadastrado. Preencha nome e medida para continuar.', true);
-  return;
+ const sku=code.slice(0,10),serial=code.slice(10,20);
+ if(records[sku] && records[sku].serials && records[sku].serials[serial]){
+  playErrorBeep();if(navigator.vibrate)navigator.vibrate([150,100,150]);
+  status('REJEITADO: esta unidade já foi contabilizada.',true);msg('Duplicidade rejeitada: '+code,true);return;
  }
- registerValidSerial(sku,serial,code);
+ const meta=catalog[sku];
+ if(!meta){
+  playErrorBeep();if(navigator.vibrate)navigator.vibrate([100,50,100]);
+  status('CONFERÊNCIA: SKU '+sku+' não consta no catálogo. Não foi contabilizado.',true);
+  msg('Produto desconhecido. Solicite conferência e atualização autorizada do catálogo.',true);return;
+ }
+ pendingScan={sku,serial,code};
+ $('newSku').value=sku;$('newSerial').value=serial;$('newFullCode').value=code;
+ $('newName').value=meta.name;$('newMeasure').value=meta.measure;
+ $('newLot').value='';$('newManufactureDate').value='';
+ $('productModal').classList.add('open');
+ status('VALIDAÇÃO: produto e unidade identificados. Confirme para contabilizar.',false);
 }
 
 function saveNewProduct(){
  const item=pendingScan;
- if(!item){
-  msg('Nenhuma leitura pendente para cadastrar.', true);
-  return;
+ if(!item){msg('Nenhuma leitura pendente para confirmar.',true);return;}
+ // Revalidação imediatamente antes de gravar, evitando duplicidade por concorrência.
+ if(item.code.length!==20 || item.sku!==item.code.slice(0,10) || item.serial!==item.code.slice(10)){
+  pendingScan=null;$('productModal').classList.remove('open');msg('Falha na validação do código. Leitura cancelada.',true);return;
  }
- const name=$('newName').value.trim();
- const measure=$('newMeasure').value.trim();
- if(!name || !measure){
-  status('Preencha o nome do produto e a medida.', true);
-  (!name ? $('newName') : $('newMeasure')).focus();
-  return;
- }
- // Salva os dados do produto pelo SKU e contabiliza a unidade que abriu o cadastro.
- productsMeta[item.sku]={name,measure};
+ if(!catalog[item.sku]){pendingScan=null;$('productModal').classList.remove('open');msg('SKU fora do catálogo. Leitura não contabilizada.',true);return;}
+ if(records[item.sku]?.serials?.[item.serial]){pendingScan=null;$('productModal').classList.remove('open');msg('Duplicidade detectada na confirmação. Unidade não contabilizada.',true);return;}
+ if(!records[item.sku])records[item.sku]={serials:{}};
  unitDetails[item.code]={lot:$('newLot').value.trim(),manufactureDate:$('newManufactureDate').value};
- save();
- pendingScan=null;
- $('productModal').classList.remove('open');
+ pendingScan=null;$('productModal').classList.remove('open');
  registerValidSerial(item.sku,item.serial,item.code);
 }
 
 function cancelNewProduct(){
  pendingScan=null;
  $('productModal').classList.remove('open');
- status('Cadastro cancelado. A leitura não foi contabilizada.', true);
+ status('Leitura cancelada. Nenhuma unidade foi contabilizada.', true);
 }
 
 function registerValidSerial(sku, serial, fullCode) {
@@ -319,7 +319,7 @@ function render(){
  if(!groups.length){$('list').className='empty';$('list').textContent='Nenhuma leitura realizada ainda.';return;}
  $('list').className='';
  $('list').innerHTML=groups.map(([sku,g])=>{
-  const meta = productsMeta[sku] || {name:'Produto não nomeado', measure:'N/A'};
+  const meta = catalog[sku] || productsMeta[sku] || {name:'Produto não identificado', measure:'Conferência'};
   const serialsList = Object.keys(g.serials||{});
   const qty = serialsList.length;
   const details = serialsList.map(s => 
@@ -344,7 +344,6 @@ function render(){
   if(action==='delete'){
    if(confirm('Excluir todas as leituras deste SKU?')){
     delete records[sku];
-    delete productsMeta[sku];
     save();render();msg('Grupo excluído.');
     autoSyncToCloud();
    }
@@ -460,7 +459,7 @@ $('add').addEventListener('click',()=>{
 });
 $('manual').addEventListener('keydown',e=>{if(e.key==='Enter')$('add').click();});
 $('csv').addEventListener('click',exportCSV);
-$('backup').addEventListener('click',()=>download(new Blob([JSON.stringify({version:3,exportedAt:new Date().toISOString(),records,productsMeta,unitDetails},null,2)],{type:['application/json']}),'backup_contagem.json'));
+$('backup').addEventListener('click',()=>download(new Blob([JSON.stringify({version:4,exportedAt:new Date().toISOString(),records,productsMeta:catalog,unitDetails},null,2)],{type:['application/json']}),'backup_contagem.json'));
 $('importBtn').addEventListener('click',()=>$('file').click());
 $('syncCloud').addEventListener('click',syncToCloud);
 
@@ -480,15 +479,16 @@ $('file').addEventListener('change',async e=>{
   const u=data.unitDetails||{};
   if(!r||typeof r!=='object')throw Error('Formato inválido');
   if(!confirm('Substituir a contagem atual pelos dados do backup?'))return;
-  records=r;
-  productsMeta=m;
+  const clean={};for(const [sku,g] of Object.entries(r)){if(/^\d{10}$/.test(sku)&&catalog[sku]){const serials={};for(const [serial,stamp] of Object.entries(g?.serials||{})){if(/^\d{10}$/.test(serial))serials[serial]=stamp;}if(Object.keys(serials).length)clean[sku]={serials};}}
+  records=clean;
+  productsMeta={...catalog};
   unitDetails=u;
   save();render();msg('Backup restaurado com sucesso.');
   autoSyncToCloud();
  }catch(err){msg('Erro ao restaurar: '+err.message, true);}finally{$('file').value='';}
 });
 
-$('clear').addEventListener('click',()=>{if(confirm('Tem certeza de que deseja apagar toda a contagem?')){records={};productsMeta={};unitDetails={};save();render();msg('Contagem zerada.'); autoSyncToCloud();}});
+$('clear').addEventListener('click',()=>{if(confirm('Tem certeza de que deseja apagar toda a contagem?')){records={};unitDetails={};save();render();msg('Contagem zerada.'); autoSyncToCloud();}});
 
 try{
  const old=localStorage.getItem(KEY);
@@ -501,12 +501,19 @@ try{
   localStorage.setItem(KEY, JSON.stringify(records));
  }
  if(oldMeta) {
-  productsMeta=JSON.parse(oldMeta);
+  productsMeta={...JSON.parse(oldMeta),...catalog};
  } else {
-  productsMeta = defaultMeta;
+  productsMeta = {...catalog};
   localStorage.setItem(META_KEY, JSON.stringify(productsMeta));
  }
  if(oldUnits) unitDetails=JSON.parse(oldUnits);
+ // Migração segura: somente SKU de 10 dígitos e serial de 10 dígitos permanecem na contagem.
+ const cleanRecords={};
+ for(const [sku,group] of Object.entries(records||{})){if(/^\d{10}$/.test(sku) && catalog[sku]){const serials={};for(const [serial,stamp] of Object.entries(group?.serials||{})){if(/^\d{10}$/.test(serial))serials[serial]=stamp;}if(Object.keys(serials).length)cleanRecords[sku]={serials};}}
+ records=cleanRecords;
+ // Metadados de contagem nunca substituem os dados oficiais do catálogo.
+ productsMeta={...productsMeta,...catalog};
+ save();
 
  const savedUrl=localStorage.getItem(SB_URL_KEY);
  const savedKey=localStorage.getItem(SB_KEY_KEY);
