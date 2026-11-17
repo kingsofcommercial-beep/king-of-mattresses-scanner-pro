@@ -254,6 +254,33 @@ function processScannedCode(raw){
  registerValidSerial(sku,serial,code);
 }
 
+function saveNewProduct(){
+ const item=pendingScan;
+ if(!item){
+  msg('Nenhuma leitura pendente para cadastrar.', true);
+  return;
+ }
+ const name=$('newName').value.trim();
+ const measure=$('newMeasure').value.trim();
+ if(!name || !measure){
+  status('Preencha o nome do produto e a medida.', true);
+  (!name ? $('newName') : $('newMeasure')).focus();
+  return;
+ }
+ // Salva os dados do produto pelo SKU e contabiliza a unidade que abriu o cadastro.
+ productsMeta[item.sku]={name,measure};
+ save();
+ pendingScan=null;
+ $('productModal').classList.remove('open');
+ registerValidSerial(item.sku,item.serial,item.code);
+}
+
+function cancelNewProduct(){
+ pendingScan=null;
+ $('productModal').classList.remove('open');
+ status('Cadastro cancelado. A leitura não foi contabilizada.', true);
+}
+
 function registerValidSerial(sku, serial, fullCode) {
  if(!records[sku]) {
   records[sku] = { serials: {} };
@@ -408,6 +435,9 @@ async function stop(){
  $('start').disabled=false;$('stop').disabled=true;status('Câmera desligada.');
 }
 
+$('saveNewProduct').addEventListener('click',saveNewProduct);
+$('cancelNewProduct').addEventListener('click',cancelNewProduct);
+$('newMeasure').addEventListener('keydown',e=>{if(e.key==='Enter')saveNewProduct();});
 $('start').addEventListener('click',start);
 $('stop').addEventListener('click',stop);
 $('add').addEventListener('click',()=>{
