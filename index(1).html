@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<title>King of Mattresses — Scanner PRO</title>
+<!-- Supabase JS Client CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#151f30;--line:#2b394d;--gold:#f5b942;--muted:#9aabc1;--green:#34d399;--red:#f87171}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f8fafc;font:15px system-ui,-apple-system,Segoe UI,sans-serif}
+header{padding:22px 18px 16px;background:linear-gradient(130deg,#17243a,#111827);border-bottom:1px solid var(--line)}
+h1{font-size:23px;margin:0 0 5px}header p{color:var(--muted);margin:0;font-size:13px}
+main{max-width:850px;margin:auto;padding:16px;display:grid;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px}
+h2{font-size:16px;margin:0 0 12px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.stat{background:#0d1727;border:1px solid var(--line);padding:12px;border-radius:12px}.stat small{display:block;color:var(--muted);font-size:11px}.stat strong{font-size:24px}
+button,input{font:inherit}button{border:0;border-radius:11px;padding:12px 14px;background:var(--gold);color:#201707;font-weight:750;cursor:pointer}
+button.secondary{background:#26364c;color:#f8fafc;border:1px solid #3b4c63}button.danger{background:#49252d;color:#fecdd3;border:1px solid #71343e}
+button:disabled{opacity:.45;cursor:not-allowed}.actions{display:flex;gap:8px;flex-wrap:wrap}.actions button{flex:1}
+#reader{width:100%;max-height:330px;object-fit:cover;border-radius:12px;background:#050a12;margin-top:12px}
+.note{color:var(--muted);font-size:12px;line-height:1.5}.row{display:flex;gap:8px;align-items:center}.row input{flex:1;min-width:0}
+input{background:#0d1727;color:white;border:1px solid #3b4c63;border-radius:10px;padding:12px;width:100%}
+label{display:block;color:var(--muted);font-size:12px;margin:10px 0 5px}
+.item{padding:12px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0}.itemtop{display:flex;justify-content:space-between;gap:12px;align-items:start}.item strong{font-size:14px;overflow-wrap:anywhere}.qty{font-size:22px;font-weight:800;color:var(--gold);white-space:nowrap}
+.subcodes{color:var(--muted);font-size:12px;margin-top:7px;line-height:1.6}.itembuttons{display:flex;gap:6px;margin-top:9px}.itembuttons button{padding:7px 10px;font-size:12px}
+.empty{color:var(--muted);text-align:center;padding:18px 4px}.status{color:var(--green);font-size:13px;min-height:18px;margin-top:8px}
+.status-error{color:var(--red);font-size:13px;min-height:18px;margin-top:8px}
+footer{text-align:center;color:var(--muted);font-size:11px;padding:4px 16px 28px}
+@media(max-width:420px){.stats{gap:6px}.stat{padding:9px}.stat strong{font-size:20px}.panel{padding:13px}}
+
+.modal{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
+.modal.open{display:flex}.modalbox{width:min(100%,480px);background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 18px 60px #0008}
+.modalbox h2{margin:0 0 8px}.modalbox p{color:var(--muted);font-size:13px;line-height:1.5}
+</style>
+</head>
+<body>
+<header><h1 style="color:#f5b942">♛ KING OF MATTRESSES</h1><p>SCANNER PRO · SUPABASE CLOUD EDITION</p></header>
+<main>
+<section class="panel">
+ <h2>1. Escanear produtos</h2>
+ <div class="actions"><button id="start">Abrir câmera e escanear</button><button class="secondary" id="stop" disabled>Parar câmera</button></div>
+ <video id="reader" playsinline muted hidden></video>
+ <div id="fallbackReader" hidden></div>
+ <div class="status" id="cameraStatus">A câmera será solicitada quando você tocar em “Abrir câmera”.</div>
+ <p class="note">Enquadre o código de barras correto (inferior). Todo código com exatamente 13 dígitos é bloqueado. Duplicatas do código completo emitem alerta de erro.</p>
+</section>
+<section class="panel">
+ <h2>2. Lançamento manual por código de barras</h2>
+ <label for="manual">Digite ou cole o código completo</label>
+ <div class="row"><input id="manual" inputmode="numeric" autocomplete="off" placeholder="Código de barras"><button id="add">Adicionar</button></div>
+</section>
+<section class="panel">
+ <h2>3. Resumo da contagem</h2>
+ <div class="stats">
+  <div class="stat"><small>Unidades totais</small><strong id="total">0</strong></div>
+  <div class="stat"><small>Produtos agrupados</small><strong id="families">0</strong></div>
+  <div class="stat"><small>Códigos diferentes</small><strong id="codes">0</strong></div>
+ </div>
+ <p class="note">Regra ativa: 10 primeiros dígitos identificam o produto; os demais identificam a unidade. Códigos com 13 dígitos são bloqueados.</p>
+</section>
+<section class="panel">
+ <h2>4. Produtos contados</h2>
+ <div id="list" class="empty">Nenhuma leitura realizada ainda.</div>
+</section>
+<section class="panel">
+ <h2>5. Configuração Supabase (Nuvem)</h2>
+ <label for="sbUrl">Supabase URL</label>
+ <input id="sbUrl" placeholder="https://seu-projeto.supabase.co" autocomplete="off">
+ <label for="sbKey">Supabase Anon Key</label>
+ <input id="sbKey" type="password" placeholder="sua-chave-anon" autocomplete="off">
+ <div class="actions" style="margin-top:10px">
+  <button class="secondary" id="saveConfig">Salvar Credenciais</button>
+  <button id="syncCloud">Sincronizar com a Nuvem</button>
+ </div>
+</section>
+<section class="panel">
+ <h2>6. Relatórios e segurança dos dados</h2>
+ <div class="actions">
+  <button id="csv">Exportar Excel (CSV)</button>
+  <button class="secondary" id="backup">Baixar backup JSON</button>
+ </div>
+ <div class="actions" style="margin-top:8px">
+  <button class="secondary" id="importBtn">Restaurar backup JSON</button>
+  <button class="danger" id="clear">Zerar contagem</button>
+ </div>
+ <input type="file" id="file" accept=".json,application/json" hidden>
+ <div class="status" id="message" aria-live="polite"></div>
+</section>
+
+<section class="modal" id="productModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+ <div class="modalbox">
+  <h2 id="modalTitle">Cadastrar produto não identificado</h2>
+  <p>O código foi lido, mas este SKU ainda não está cadastrado. Confira o código e informe o nome e a medida para registrar esta unidade.</p>
+  <label for="newSku">SKU (10 primeiros dígitos)</label><input id="newSku" readonly>
+  <label for="newName">Nome do produto</label><input id="newName" placeholder="Ex.: PROT IMPERM 30 CM 18" autocomplete="off">
+  <label for="newMeasure">Medida</label><input id="newMeasure" placeholder="Ex.: 30 x 200 x 160 cm" autocomplete="off">
+  <div class="actions" style="margin-top:14px"><button id="saveNewProduct">Salvar cadastro e contabilizar</button><button class="secondary" id="cancelNewProduct">Cancelar leitura</button></div>
+ </div>
+</section>
+
+</main>
+
+
+<footer>♛ KING OF MATTRESSES · SCANNER PRO<br>Sincronização local e em nuvem via Supabase.</footer>
+<script>
+(() => {
+const $=id=>document.getElementById(id);
+let records={}; 
+let productsMeta={}; 
+let stream=null, detector=null, scanning=false, lastCode='', lastAt=0, busy=false, fallbackScanner=null;
+const KEY='contagem_inteligente_v2';
+const META_KEY='produtos_meta_v2';
+const SB_URL_KEY='sb_url_v1';
+const SB_KEY_KEY='sb_key_v1';
+let supabaseClient=null;
+let pendingScan=null;
+
+const defaultRecords = {
+  "6050647026": {
+    serials: {
+      "187242300014": Date.now()
+    }
+  }
+};
+const defaultMeta = {
+  "6050647026": {
+    name: "Protetor Impermeável Padrão",
+    measure: "Padrão / Conforme Etiqueta"
+  }
+};
+
+function playSuccessBeep() {
+ try {
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+  gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+ } catch(e){}
+}
+
+function playErrorBeep() {
+ try {
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const now = audioCtx.currentTime;
+  
+  const osc1 = audioCtx.createOscillator();
+  const gain1 = audioCtx.createGain();
+  osc1.type = 'sawtooth';
+  osc1.frequency.setValueAtTime(220, now);
+  gain1.gain.setValueAtTime(0.2, now);
+  gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+  osc1.connect(gain1); gain1.connect(audioCtx.destination);
+  osc1.start(now); osc1.stop(now + 0.12);
+
+  const osc2 = audioCtx.createOscillator();
+  const gain2 = audioCtx.createGain();
+  osc2.type = 'sawtooth';
+  osc2.frequency.setValueAtTime(160, now + 0.15);
+  gain2.gain.setValueAtTime(0.2, now + 0.15);
+  gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.27);
+  osc2.connect(gain2); gain2.connect(audioCtx.destination);
+  osc2.start(now + 0.15); osc2.stop(now + 0.27);
+ } catch(e){}
+}
+
+function initSupabase(){
+ const url=localStorage.getItem(SB_URL_KEY);
+ const key=localStorage.getItem(SB_KEY_KEY);
+ if(url && key && window.supabase){
+  try{
+   supabaseClient=window.supabase.createClient(url,key);
+  }catch(e){supabaseClient=null;}
+ }
+}
+
+function save(){
+ try{
+  localStorage.setItem(KEY,JSON.stringify(records));
+  localStorage.setItem(META_KEY,JSON.stringify(productsMeta));
+ }catch(e){msg('Não foi possível salvar localmente.');}
+}
+
+function msg(s, isError=false){
+ const m=$('message');
+ m.textContent=s;
+ m.className = isError ? 'status-error' : 'status';
+}
+function status(s, isError=false){
+ const st=$('cameraStatus');
+ st.textContent=s;
+ st.className = isError ? 'status-error' : 'status';
+}
+function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+async function autoSyncToCloud(){
+ initSupabase();
+ if(!supabaseClient) return;
+ try{
+  const payload={id: 'contagem_atual', records: records, meta: productsMeta, updated_at: new Date().toISOString()};
+  await supabaseClient.from('inventario_king').upsert(payload);
+ }catch(err){}
+}
+
+async function syncToCloud(){
+ initSupabase();
+ if(!supabaseClient){msg('Configure e salve a URL e a Chave do Supabase primeiro.', true);return;}
+ msg('Sincronizando com o Supabase...');
+ try{
+  const payload={id: 'contagem_atual', records: records, meta: productsMeta, updated_at: new Date().toISOString()};
+  const {error}=await supabaseClient.from('inventario_king').upsert(payload);
+  if(error)throw error;
+  msg('Sincronizado com sucesso na nuvem!');
+ }catch(err){
+  msg('Erro ao sincronizar: '+err.message, true);
+ }
+}
+
+function processScannedCode(raw){
+ const code=String(raw||'').trim().replace(/\s+/g,'');
+ if(!code || !/^\d+$/.test(code) || code.length <= 10) {
+  playErrorBeep();
+  if(navigator.vibrate) navigator.vibrate([100,50,100]);
+  status('Código inválido. Informe um código numérico com mais de 10 dígitos.', true);
+  return;
+ }
+ if(code.length === 13) {
+  playErrorBeep();
+  if(navigator.vibrate) navigator.vibrate([150,50,150]);
+  status('ERRO: todo código com exatamente 13 dígitos é bloqueado.', true);
+  msg('Código de 13 dígitos rejeitado: ' + code, true);
+  return;
+ }
+ const sku=code.slice(0,10), serial=code.slice(10);
+ if(records[sku] && records[sku].serials && records[sku].serials[serial]) {
+  playErrorBeep();
+  if(navigator.vibrate) navigator.vibrate([150,100,150]);
+  status('ERRO: esta etiqueta completa já foi contabilizada!', true);
+  msg('Etiqueta duplicada rejeitada: ' + code, true);
+  return;
+ }
+ if(!productsMeta[sku]) {
+  pendingScan={sku,serial,code};
+  $('newSku').value=sku;$('newName').value='';$('newMeasure').value='';
+  $('productModal').classList.add('open');$('newName').focus();
+  playErrorBeep();status('Produto não cadastrado. Preencha nome e medida para continuar.', true);
+  return;
+ }
+ registerValidSerial(sku,serial,code);
+}
+
+function saveNewProduct(){
+ const item=pendingScan;
+ if(!item){
+  msg('Nenhuma leitura pendente para cadastrar.', true);
+  return;
+ }
+ const name=$('newName').value.trim();
+ const measure=$('newMeasure').value.trim();
+ if(!name || !measure){
+  status('Preencha o nome do produto e a medida.', true);
+  (!name ? $('newName') : $('newMeasure')).focus();
+  return;
+ }
+ // Salva os dados do produto pelo SKU e contabiliza a unidade que abriu o cadastro.
+ productsMeta[item.sku]={name,measure};
+ save();
+ pendingScan=null;
+ $('productModal').classList.remove('open');
+ registerValidSerial(item.sku,item.serial,item.code);
+}
+
+function cancelNewProduct(){
+ pendingScan=null;
+ $('productModal').classList.remove('open');
+ status('Cadastro cancelado. A leitura não foi contabilizada.', true);
+}
+
+function registerValidSerial(sku, serial, fullCode) {
+ if(!records[sku]) {
+  records[sku] = { serials: {} };
+ }
+ records[sku].serials[serial] = Date.now();
+ save();
+ render();
+ playSuccessBeep();
+ if(navigator.vibrate) navigator.vibrate(100);
+ status('Leitura registrada com sucesso: ' + fullCode);
+ msg('Produto adicionado: SKU ' + sku);
+ autoSyncToCloud();
+}
+
+function render(){
+ const groups=Object.entries(records).sort((a,b)=>a[0].localeCompare(b[0]));
+ let total=0,codeCount=0;
+ for(const [,g] of groups) {
+  const q = Object.keys(g.serials||{}).length;
+  total += q;
+  codeCount += q;
+ }
+ $('total').textContent=total;$('families').textContent=groups.length;$('codes').textContent=codeCount;
+ if(!groups.length){$('list').className='empty';$('list').textContent='Nenhuma leitura realizada ainda.';return;}
+ $('list').className='';
+ $('list').innerHTML=groups.map(([sku,g])=>{
+  const meta = productsMeta[sku] || {name:'Produto não nomeado', measure:'N/A'};
+  const serialsList = Object.keys(g.serials||{});
+  const qty = serialsList.length;
+  const details = serialsList.map(s => 
+   `<div class="row" style="justify-content:space-between;gap:8px"><span>Serial: ${escapeHtml(s)}</span><span>× 1</span></div>`).join('');
+  return `<div class="item">
+   <div class="itemtop">
+    <div>
+     <strong>SKU: ${escapeHtml(sku)}</strong><br>
+     <span style="color:var(--gold);font-size:13px">${escapeHtml(meta.name)} (${escapeHtml(meta.measure)})</span>
+     <div class="subcodes">${details}</div>
+    </div>
+    <div class="qty">${qty}</div>
+   </div>
+   <div class="itembuttons">
+    <button class="danger" data-sku="${escapeHtml(sku)}" data-action="delete">Excluir grupo</button>
+   </div>
+  </div>`;
+ }).join('');
+
+ $('list').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+  const sku=b.dataset.sku,action=b.dataset.action;
+  if(action==='delete'){
+   if(confirm('Excluir todas as leituras deste SKU?')){
+    delete records[sku];
+    delete productsMeta[sku];
+    save();render();msg('Grupo excluído.');
+    autoSyncToCloud();
+   }
+  }
+ }));
+}
+
+function exportCSV(){
+ const rows=[['SKU (10 digitos)','Nome do Produto','Medida','Numero de Serie','Quantidade']];
+ for(const [sku,g] of Object.entries(records).sort((a,b)=>a[0].localeCompare(b[0]))){
+  const meta = productsMeta[sku] || {name:'', measure:''};
+  for(const serial of Object.keys(g.serials||{})){
+   rows.push([sku, meta.name, meta.measure, serial, 1]);
+  }
+ }
+ if(rows.length===1){msg('Não há dados para exportar.', true);return;}
+ const csv='\uFEFF'+rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\r\n');
+ download(new Blob([csv],{type:'text/csv;charset=utf-8'}),'contagem_produtos.csv');
+ msg('Relatório CSV gerado.');
+}
+
+function download(blob,name){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}
+
+async function loadFallbackLibrary(){
+ return new Promise((resolve,reject)=>{
+  if(window.Html5Qrcode)return resolve();
+  const script=document.createElement('script');
+  script.src='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+  script.onload=()=>window.Html5Qrcode?resolve():reject(new Error('Biblioteca de leitura não carregou.'));
+  script.onerror=()=>reject(new Error('Erro ao carregar leitor alternativo.'));
+  document.head.appendChild(script);
+ });
+}
+
+function acceptCode(code){
+ const now=Date.now();
+ if(code && (code!==lastCode || now-lastAt>1800)){
+  lastCode=code;lastAt=now;
+  processScannedCode(code);
+ }
+}
+
+async function startNative(){
+ if(!('BarcodeDetector' in window))throw new Error('Leitor nativo indisponível.');
+ const formats=await BarcodeDetector.getSupportedFormats();
+ detector=new BarcodeDetector({formats});
+ stream=await navigator.mediaDevices.getUserMedia({
+  video:{
+   facingMode:{ideal:'environment'},
+   width:{ideal:1920},
+   height:{ideal:1080},
+   advanced:[{focusMode:'continuous'}]
+  },
+  audio:false
+ });
+ $('reader').srcObject=stream;$('reader').hidden=false;$('fallbackReader').hidden=true;
+ await $('reader').play();scanning=true;
+ $('start').disabled=true;$('stop').disabled=false;status('Câmera ativa com foco contínuo. Aponte para o código inferior.');scanLoop();
+}
+
+async function startFallback(){
+ await loadFallbackLibrary();
+ const names=['EAN_13','EAN_8','UPC_A','UPC_E','CODE_128','CODE_39','ITF','CODABAR','QR_CODE','DATA_MATRIX','PDF_417'];
+ const formats=names.map(n=>Html5QrcodeSupportedFormats[n]).filter(v=>v!==undefined);
+ $('reader').hidden=true;$('fallbackReader').hidden=false;
+ fallbackScanner=new Html5Qrcode('fallbackReader',{verbose:false,formatsToSupport:formats});
+ await fallbackScanner.start({facingMode:'environment'},{fps:15,qrbox:{width:300,height:150},disableFlip:true},text=>acceptCode(text),()=>{});
+ $('start').disabled=true;$('stop').disabled=false;status('Câmera ativa.');
+}
+
+async function start(){
+ $('start').disabled=true;status('Solicitando acesso à câmera...');
+ if(!window.isSecureContext){$('start').disabled=false;status('A câmera exige HTTPS (GitHub Pages).', true);return;}
+ try{await startNative();}
+ catch(nativeError){
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  $('reader').srcObject=null;$('reader').hidden=true;
+  try{await startFallback();}
+  catch(fallbackError){$('start').disabled=false;$('stop').disabled=true;status('Erro ao abrir câmera: '+fallbackError.message, true);}
+ }
+}
+
+async function scanLoop(){
+ if(!scanning)return;
+ if(!busy && $('reader').readyState>=2){
+  busy=true;
+  try{const found=await detector.detect($('reader'));if(found.length)acceptCode(found[0].rawValue);}
+  catch(e){}
+  finally{busy=false;}
+ }
+ if(scanning)setTimeout(scanLoop,150);
+}
+
+async function stop(){
+ scanning=false;
+ if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+ $('reader').srcObject=null;$('reader').hidden=true;
+ if(fallbackScanner){try{await fallbackScanner.stop();}catch(e){}try{await fallbackScanner.clear();}catch(e){}fallbackScanner=null;}
+ $('fallbackReader').hidden=true;$('fallbackReader').innerHTML='';
+ $('start').disabled=false;$('stop').disabled=true;status('Câmera desligada.');
+}
+
+$('saveNewProduct').addEventListener('click',saveNewProduct);
+$('cancelNewProduct').addEventListener('click',cancelNewProduct);
+$('newMeasure').addEventListener('keydown',e=>{if(e.key==='Enter')saveNewProduct();});
+$('start').addEventListener('click',start);
+$('stop').addEventListener('click',stop);
+$('add').addEventListener('click',()=>{
+ processScannedCode($('manual').value);
+ $('manual').value='';
+ $('manual').focus();
+});
+$('manual').addEventListener('keydown',e=>{if(e.key==='Enter')$('add').click();});
+$('csv').addEventListener('click',exportCSV);
+$('backup').addEventListener('click',()=>download(new Blob([JSON.stringify({version:2,exportedAt:new Date().toISOString(),records,productsMeta},null,2)],{type:['application/json']}),'backup_contagem.json'));
+$('importBtn').addEventListener('click',()=>$('file').click());
+$('syncCloud').addEventListener('click',syncToCloud);
+
+$('saveConfig').addEventListener('click',()=>{
+ localStorage.setItem(SB_URL_KEY,$('sbUrl').value.trim());
+ localStorage.setItem(SB_KEY_KEY,$('sbKey').value.trim());
+ initSupabase();
+ msg('Credenciais do Supabase salvas e ativadas!');
+});
+
+$('file').addEventListener('change',async e=>{
+ const f=e.target.files[0];if(!f)return;
+ try{
+  const data=JSON.parse(await f.text());
+  const r=data.records||data;
+  const m=data.productsMeta||data.meta||{};
+  if(!r||typeof r!=='object')throw Error('Formato inválido');
+  if(!confirm('Substituir a contagem atual pelos dados do backup?'))return;
+  records=r;
+  productsMeta=m;
+  save();render();msg('Backup restaurado com sucesso.');
+  autoSyncToCloud();
+ }catch(err){msg('Erro ao restaurar: '+err.message, true);}finally{$('file').value='';}
+});
+
+$('clear').addEventListener('click',()=>{if(confirm('Tem certeza de que deseja apagar toda a contagem?')){records={};productsMeta={};save();render();msg('Contagem zerada.'); autoSyncToCloud();}});
+
+try{
+ const old=localStorage.getItem(KEY);
+ const oldMeta=localStorage.getItem(META_KEY);
+ if(old) {
+  records=JSON.parse(old);
+ } else {
+  records = defaultRecords;
+  localStorage.setItem(KEY, JSON.stringify(records));
+ }
+ if(oldMeta) {
+  productsMeta=JSON.parse(oldMeta);
+ } else {
+  productsMeta = defaultMeta;
+  localStorage.setItem(META_KEY, JSON.stringify(productsMeta));
+ }
+
+ const savedUrl=localStorage.getItem(SB_URL_KEY);
+ const savedKey=localStorage.getItem(SB_KEY_KEY);
+ if(savedUrl)$('sbUrl').value=savedUrl;
+ if(savedKey)$('sbKey').value=savedKey;
+ initSupabase();
+}catch(e){
+ records=defaultRecords; 
+ productsMeta=defaultMeta;
+}
+
+render();
+})();
+</script>
+</body>
+</html>
