@@ -27,14 +27,11 @@ label{display:block;color:var(--muted);font-size:12px;margin:10px 0 5px}
 .empty{color:var(--muted);text-align:center;padding:18px 4px}.status{color:var(--green);font-size:13px;min-height:18px;margin-top:8px}
 .status-error{color:var(--red);font-size:13px;min-height:18px;margin-top:8px}
 footer{text-align:center;color:var(--muted);font-size:11px;padding:4px 16px 28px}
-.modal-backdrop{position:fixed;inset:0;z-index:20;background:#020617dd;display:flex;align-items:center;justify-content:center;padding:16px}
-.modal-backdrop[hidden]{display:none}
-.modal{width:min(100%,520px);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--gold);border-radius:18px;padding:18px;box-shadow:0 20px 60px #0009}
-.modal h2{font-size:19px;color:var(--gold);margin:0 0 8px}
-.modal .code-preview{overflow-wrap:anywhere;background:#0d1727;border:1px solid var(--line);border-radius:10px;padding:12px;font-weight:700;letter-spacing:.3px}
-.modal-actions{display:flex;gap:8px;margin-top:16px}.modal-actions button{flex:1}
-body.modal-open{overflow:hidden}
 @media(max-width:420px){.stats{gap:6px}.stat{padding:9px}.stat strong{font-size:20px}.panel{padding:13px}}
+
+.modal{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
+.modal.open{display:flex}.modalbox{width:min(100%,480px);background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 18px 60px #0008}
+.modalbox h2{margin:0 0 8px}.modalbox p{color:var(--muted);font-size:13px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -46,7 +43,7 @@ body.modal-open{overflow:hidden}
  <video id="reader" playsinline muted hidden></video>
  <div id="fallbackReader" hidden></div>
  <div class="status" id="cameraStatus">A câmera será solicitada quando você tocar em “Abrir câmera”.</div>
- <p class="note">Enquadre o código de barras correto (inferior). O código superior (EAN) e duplicatas emitem alerta de erro.</p>
+ <p class="note">Enquadre o código de barras correto (inferior). Todo código com exatamente 13 dígitos é bloqueado. Duplicatas do código completo emitem alerta de erro.</p>
 </section>
 <section class="panel">
  <h2>2. Lançamento manual por código de barras</h2>
@@ -60,7 +57,7 @@ body.modal-open{overflow:hidden}
   <div class="stat"><small>Produtos agrupados</small><strong id="families">0</strong></div>
   <div class="stat"><small>Códigos diferentes</small><strong id="codes">0</strong></div>
  </div>
- <p class="note">Regra de SKU ativa: 10 primeiros dígitos como SKU, restante como serial único.</p>
+ <p class="note">Regra ativa: 10 primeiros dígitos identificam o produto; os demais identificam a unidade. Códigos com 13 dígitos são bloqueados.</p>
 </section>
 <section class="panel">
  <h2>4. Produtos contados</h2>
@@ -90,25 +87,20 @@ body.modal-open{overflow:hidden}
  <input type="file" id="file" accept=".json,application/json" hidden>
  <div class="status" id="message" aria-live="polite"></div>
 </section>
+
+<section class="modal" id="productModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+ <div class="modalbox">
+  <h2 id="modalTitle">Cadastrar produto não identificado</h2>
+  <p>O código foi lido, mas este SKU ainda não está cadastrado. Confira o código e informe o nome e a medida para registrar esta unidade.</p>
+  <label for="newSku">SKU (10 primeiros dígitos)</label><input id="newSku" readonly>
+  <label for="newName">Nome do produto</label><input id="newName" placeholder="Ex.: PROT IMPERM 30 CM 18" autocomplete="off">
+  <label for="newMeasure">Medida</label><input id="newMeasure" placeholder="Ex.: 30 x 200 x 160 cm" autocomplete="off">
+  <div class="actions" style="margin-top:14px"><button id="saveNewProduct">Salvar cadastro e contabilizar</button><button class="secondary" id="cancelNewProduct">Cancelar leitura</button></div>
+ </div>
+</section>
+
 </main>
 
-<div class="modal-backdrop" id="productModal" hidden>
- <section class="modal" role="dialog" aria-modal="true" aria-labelledby="productModalTitle">
-  <h2 id="productModalTitle">Produto não cadastrado</h2>
-  <p class="note">O código foi lido pela câmera. Confira o código e informe o nome e a medida para cadastrar o produto.</p>
-  <label>Código lido</label>
-  <div class="code-preview" id="pendingCode"></div>
-  <label for="newProductName">Nome do produto</label>
-  <input id="newProductName" maxlength="120" placeholder="Digite o nome do produto" autocomplete="off">
-  <label for="newProductMeasure">Medida</label>
-  <input id="newProductMeasure" maxlength="80" placeholder="Ex.: 30 x 190 x 90 cm" autocomplete="off">
-  <div class="modal-actions">
-   <button class="secondary" id="cancelProduct">Cancelar</button>
-   <button id="saveProduct">Cadastrar e contar unidade</button>
-  </div>
-  <div class="status-error" id="registrationError" aria-live="polite"></div>
- </section>
-</div>
 
 <footer>♛ KING OF MATTRESSES · SCANNER PRO<br>Sincronização local e em nuvem via Supabase.</footer>
 <script>
@@ -116,12 +108,13 @@ body.modal-open{overflow:hidden}
 const $=id=>document.getElementById(id);
 let records={}; 
 let productsMeta={}; 
-let stream=null, detector=null, scanning=false, lastCode='', lastAt=0, busy=false, fallbackScanner=null, pendingRegistration=null;
+let stream=null, detector=null, scanning=false, lastCode='', lastAt=0, busy=false, fallbackScanner=null;
 const KEY='contagem_inteligente_v2';
 const META_KEY='produtos_meta_v2';
 const SB_URL_KEY='sb_url_v1';
 const SB_KEY_KEY='sb_key_v1';
 let supabaseClient=null;
+let pendingScan=null;
 
 const defaultRecords = {
   "6050647026": {
@@ -230,73 +223,35 @@ async function syncToCloud(){
 
 function processScannedCode(raw){
  const code=String(raw||'').trim().replace(/\s+/g,'');
- if(!code || code.length < 10) {
+ if(!code || !/^\d+$/.test(code) || code.length <= 10) {
   playErrorBeep();
   if(navigator.vibrate) navigator.vibrate([100,50,100]);
-  status('Código muito curto ou inválido.', true);
+  status('Código inválido. Informe um código numérico com mais de 10 dígitos.', true);
   return;
  }
-
- if(code.startsWith('7896988')) {
+ if(code.length === 13) {
   playErrorBeep();
   if(navigator.vibrate) navigator.vibrate([150,50,150]);
-  status('ERRO: Código superior (EAN) ignorado! Aponte para o código inferior.', true);
+  status('ERRO: todo código com exatamente 13 dígitos é bloqueado.', true);
+  msg('Código de 13 dígitos rejeitado: ' + code, true);
   return;
  }
-
- const sku = code.slice(0, 10);
- const serial = code.slice(10) || 'UNICO';
-
- if(records[sku] && records[sku].serials && Object.prototype.hasOwnProperty.call(records[sku].serials, serial)) {
+ const sku=code.slice(0,10), serial=code.slice(10);
+ if(records[sku] && records[sku].serials && records[sku].serials[serial]) {
   playErrorBeep();
   if(navigator.vibrate) navigator.vibrate([150,100,150]);
-  status('ERRO: Esta etiqueta exata já foi contabilizada!', true);
+  status('ERRO: esta etiqueta completa já foi contabilizada!', true);
   msg('Etiqueta duplicada rejeitada: ' + code, true);
   return;
  }
-
  if(!productsMeta[sku]) {
-  openProductRegistration({sku, serial, code});
+  pendingScan={sku,serial,code};
+  $('newSku').value=sku;$('newName').value='';$('newMeasure').value='';
+  $('productModal').classList.add('open');$('newName').focus();
+  playErrorBeep();status('Produto não cadastrado. Preencha nome e medida para continuar.', true);
   return;
  }
-
- registerValidSerial(sku, serial, code);
-}
-
-function openProductRegistration(item){
- if(pendingRegistration) return;
- pendingRegistration=item;
- $('pendingCode').textContent=item.code;
- $('newProductName').value='';
- $('newProductMeasure').value='';
- $('registrationError').textContent='';
- $('productModal').hidden=false;
- document.body.classList.add('modal-open');
- status('Produto não cadastrado. Preencha o nome e a medida para continuar.', true);
- msg('Cadastro necessário para o código: '+item.code, true);
- setTimeout(()=>$('newProductName').focus(),50);
-}
-
-function closeProductRegistration(){
- $('productModal').hidden=true;
- document.body.classList.remove('modal-open');
- pendingRegistration=null;
-}
-
-function saveNewProduct(){
- if(!pendingRegistration) return;
- const name=$('newProductName').value.trim();
- const measure=$('newProductMeasure').value.trim();
- if(!name || !measure){
-  $('registrationError').textContent='Preencha o nome do produto e a medida.';
-  return;
- }
- const item=pendingRegistration;
- productsMeta[item.sku]={name,measure};
- save();
- closeProductRegistration();
- // A leitura que abriu o cadastro é contabilizada automaticamente.
- registerValidSerial(item.sku,item.serial,item.code);
+ registerValidSerial(sku,serial,code);
 }
 
 function registerValidSerial(sku, serial, fullCode) {
@@ -453,9 +408,6 @@ async function stop(){
  $('start').disabled=false;$('stop').disabled=true;status('Câmera desligada.');
 }
 
-$('saveProduct').addEventListener('click',saveNewProduct);
-$('cancelProduct').addEventListener('click',closeProductRegistration);
-$('newProductMeasure').addEventListener('keydown',e=>{if(e.key==='Enter')saveNewProduct();});
 $('start').addEventListener('click',start);
 $('stop').addEventListener('click',stop);
 $('add').addEventListener('click',()=>{
