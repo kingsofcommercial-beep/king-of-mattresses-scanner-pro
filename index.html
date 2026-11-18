@@ -7,6 +7,7 @@
 <title>King of Mattresses — Scanner PRO</title>
 <!-- Supabase JS Client CDN -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
 :root{color-scheme:dark;--bg:#0b1220;--panel:#151f30;--line:#2b394d;--gold:#f5b942;--muted:#9aabc1;--green:#34d399;--red:#f87171}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f8fafc;font:15px system-ui,-apple-system,Segoe UI,sans-serif}
@@ -101,7 +102,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:4px 16px 28px
   <label>Medidas</label><input id="newMeasure" readonly>
   <label for="newLot">Lote da unidade (opcional)</label><input id="newLot" placeholder="Ex.: 0114432" inputmode="numeric" autocomplete="off">
   <label for="newManufactureDate">Data de fabricação (opcional)</label><input id="newManufactureDate" type="date">
-  <p class="note">Nenhum produto novo será cadastrado por esta tela. SKU desconhecido ou código fora do padrão fica fora da contagem até conferência.</p>
+  <p class="note" id="ocrStatus">Mantenha a etiqueta inteira visível na câmera para capturar lote e fabricação. O EAN de 13 dígitos é ignorado.</p>
   <div class="actions" style="margin-top:14px"><button id="saveNewProduct">Confirmar e contabilizar 1 unidade</button><button class="secondary" id="cancelNewProduct">Cancelar leitura</button></div>
  </div>
 </section>
@@ -124,6 +125,8 @@ const SB_URL_KEY='sb_url_v1';
 const SB_KEY_KEY='sb_key_v1';
 let supabaseClient=null;
 let pendingScan=null;
+let ocrWorker=null;
+let ocrBusy=false;
 
 // Catálogo-base validado a partir das etiquetas fornecidas.
 // O catálogo é separado da contagem e não é apagado ao zerar o inventário.
@@ -268,8 +271,53 @@ function processScannedCode(raw){
  $('newSku').value=sku;$('newSerial').value=serial;$('newFullCode').value=code;
  $('newName').value=meta.name;$('newMeasure').value=meta.measure;
  $('newLot').value='';$('newManufactureDate').value='';
+ $('ocrStatus').textContent='Lendo lote e data. Mantenha a etiqueta inteira visível na câmera...';
  $('productModal').classList.add('open');
- status('VALIDAÇÃO: produto e unidade identificados. Confirme para contabilizar.',false);
+ status('VALIDAÇÃO: produto e unidade identificados. Extraindo lote e fabricação.',false);
+ extractLabelDetails().then(result=>{
+  if(!pendingScan || pendingScan.code!==code)return;
+  $('newLot').value=result.lot||'';
+  $('newManufactureDate').value=result.date||'';
+  $('ocrStatus').textContent=result.lot && result.date ? 'Lote e data reconhecidos automaticamente. Confira e confirme a leitura.' : 'Não foi possível reconhecer lote e data com segurança. Enquadre a etiqueta inteira, com boa iluminação, e confira somente o campo não reconhecido.';
+ }).catch(()=>{ $('ocrStatus').textContent='Não foi possível ler o texto automaticamente. Confira a etiqueta e os campos.'; });
+}
+
+async function extractLabelDetails(){
+ if(!window.Tesseract || !$('reader').srcObject || $('reader').readyState<2) return {lot:'',date:''};
+ if(ocrBusy) return {lot:'',date:''};
+ ocrBusy=true;
+ try{
+  if(!ocrWorker) ocrWorker=await Tesseract.createWorker('por+eng');
+  const video=$('reader');
+  // Amplia a imagem para melhorar o reconhecimento de números pequenos na etiqueta.
+  const scale=2;
+  const canvas=document.createElement('canvas');
+  canvas.width=video.videoWidth*scale; canvas.height=video.videoHeight*scale;
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  const result=await ocrWorker.recognize(canvas);
+  const raw=String(result.data.text||'');
+  const text=raw.replace(/[|]/g,'1').replace(/\s+/g,' ');
+  // Data de fabricação no formato brasileiro: DD/MM/AAAA, DD-MM-AAAA ou DD.MM.AAAA.
+  const dm=text.match(/\b(0?[1-9]|[12]\d|3[01])[\/.\-](0?[1-9]|1[0-2])[\/.\-](20\d{2})\b/);
+  let date='';
+  if(dm){
+   const d=dm[1].padStart(2,'0'),m=dm[2].padStart(2,'0'),y=dm[3];
+   const check=new Date(Number(y),Number(m)-1,Number(d));
+   if(check.getFullYear()===Number(y)&&check.getMonth()===Number(m)-1&&check.getDate()===Number(d)) date=`${y}-${m}-${d}`;
+  }
+  // Retira identificadores conhecidos e datas antes de procurar o lote de sete dígitos.
+  let scrubbed=text.replace(/\b\d{20}\b/g,' ').replace(/\b\d{13}\b/g,' ')
+   .replace(/\b\d{1,2}[\/.\-]\d{1,2}[\/.\-]20\d{2}\b/g,' ');
+  const lotLabel=/(?:lote|lot|l0te)\s*[:#\-]?\s*([0-9OIl]{7})/i.exec(scrubbed);
+  let lot=lotLabel ? lotLabel[1].replace(/[O]/g,'0').replace(/[Il]/g,'1') : '';
+  if(!/^\d{7}$/.test(lot)) lot='';
+  if(!lot){
+   const candidates=[...scrubbed.matchAll(/(?:^|\D)(\d{7})(?=\D|$)/g)].map(m=>m[1]);
+   if(candidates.length===1) lot=candidates[0];
+  }
+  return {lot,date};
+ } finally {ocrBusy=false;}
 }
 
 function saveNewProduct(){
