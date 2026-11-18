@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#111827">
-<title>King of Mattresses — Scanner PRO</title>
+<title>King of Mattresses — Scanner PRO Automático</title>
 <!-- Supabase JS Client CDN -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -37,7 +37,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:4px 16px 28px
 </style>
 </head>
 <body>
-<header><h1 style="color:#f5b942">♛ KING OF MATTRESSES</h1><p>SCANNER PRO · SUPABASE CLOUD EDITION</p></header>
+<header><h1 style="color:#f5b942">♛ KING OF MATTRESSES</h1><p>SCANNER PRO AUTOMÁTICO · SUPABASE CLOUD EDITION</p></header>
 <main>
 <section class="panel">
  <h2>1. Escanear produtos</h2>
@@ -91,21 +91,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;padding:4px 16px 28px
  <div class="status" id="message" aria-live="polite"></div>
 </section>
 
-<section class="modal" id="productModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
- <div class="modalbox">
-  <h2 id="modalTitle">Conferir leitura antes de contabilizar</h2>
-  <p>Confira os dados identificados no catálogo. A unidade só será contabilizada após sua confirmação. Lote e fabricação podem ser informados agora.</p>
-  <label>SKU do produto</label><input id="newSku" readonly>
-  <label>Identificador da unidade</label><input id="newSerial" readonly>
-  <label>Código principal completo</label><input id="newFullCode" readonly>
-  <label>Produto identificado</label><input id="newName" readonly>
-  <label>Medidas</label><input id="newMeasure" readonly>
-  <label for="newLot">Lote da unidade (opcional)</label><input id="newLot" placeholder="Ex.: 0114432" inputmode="numeric" autocomplete="off">
-  <label for="newManufactureDate">Data de fabricação (opcional)</label><input id="newManufactureDate" type="date">
-  <p class="note" id="ocrStatus">Mantenha a etiqueta inteira visível na câmera para capturar lote e fabricação. O EAN de 13 dígitos é ignorado.</p>
-  <div class="actions" style="margin-top:14px"><button id="saveNewProduct">Confirmar e contabilizar 1 unidade</button><button class="secondary" id="cancelNewProduct">Cancelar leitura</button></div>
- </div>
-</section>
+
 
 </main>
 
@@ -124,9 +110,9 @@ const UNIT_KEY='unidades_detalhes_v1';
 const SB_URL_KEY='sb_url_v1';
 const SB_KEY_KEY='sb_key_v1';
 let supabaseClient=null;
-let pendingScan=null;
 let ocrWorker=null;
 let ocrBusy=false;
+const processingCodes=new Set();
 
 // Catálogo-base validado a partir das etiquetas fornecidas.
 // O catálogo é separado da contagem e não é apagado ao zerar o inventário.
@@ -257,6 +243,7 @@ function processScannedCode(raw){
   msg('Leitura não contabilizada. Confira a etiqueta: '+code,true);return;
  }
  const sku=code.slice(0,10),serial=code.slice(10,20);
+ if(processingCodes.has(code)) return;
  if(records[sku] && records[sku].serials && records[sku].serials[serial]){
   playErrorBeep();if(navigator.vibrate)navigator.vibrate([150,100,150]);
   status('REJEITADO: esta unidade já foi contabilizada.',true);msg('Duplicidade rejeitada: '+code,true);return;
@@ -267,19 +254,28 @@ function processScannedCode(raw){
   status('CONFERÊNCIA: SKU '+sku+' não consta no catálogo. Não foi contabilizado.',true);
   msg('Produto desconhecido. Solicite conferência e atualização autorizada do catálogo.',true);return;
  }
- pendingScan={sku,serial,code};
- $('newSku').value=sku;$('newSerial').value=serial;$('newFullCode').value=code;
- $('newName').value=meta.name;$('newMeasure').value=meta.measure;
- $('newLot').value='';$('newManufactureDate').value='';
- $('ocrStatus').textContent='Lendo lote e data. Mantenha a etiqueta inteira visível na câmera...';
- $('productModal').classList.add('open');
- status('VALIDAÇÃO: produto e unidade identificados. Extraindo lote e fabricação.',false);
- extractLabelDetails().then(result=>{
-  if(!pendingScan || pendingScan.code!==code)return;
-  $('newLot').value=result.lot||'';
-  $('newManufactureDate').value=result.date||'';
-  $('ocrStatus').textContent=result.lot && result.date ? 'Lote e data reconhecidos automaticamente. Confira e confirme a leitura.' : 'Não foi possível reconhecer lote e data com segurança. Enquadre a etiqueta inteira, com boa iluminação, e confira somente o campo não reconhecido.';
- }).catch(()=>{ $('ocrStatus').textContent='Não foi possível ler o texto automaticamente. Confira a etiqueta e os campos.'; });
+ processingCodes.add(code);
+ status('Produto identificado. Registrando unidade e lendo lote/fabricação automaticamente...',false);
+ (async()=>{
+  try{
+   const details=await extractLabelDetails();
+   // Revalida antes de gravar para impedir duplicidade mesmo em leituras concorrentes.
+   if(records[sku]?.serials?.[serial]){
+    playErrorBeep();status('REJEITADO: esta unidade já foi contabilizada.',true);msg('Duplicidade rejeitada: '+code,true);return;
+   }
+   unitDetails[code]={lot:details.lot||'',manufactureDate:details.date||''};
+   registerValidSerial(sku,serial,code);
+   if(!details.lot || !details.date){
+    status('Unidade contabilizada. Lote ou fabricação não reconhecido automaticamente; dados sinalizados para conferência.',true);
+    msg('Contagem registrada; confira lote/fabricação desta etiqueta no relatório.',true);
+   }
+  }catch(err){
+   unitDetails[code]={lot:'',manufactureDate:''};
+   if(!records[sku]?.serials?.[serial]) registerValidSerial(sku,serial,code);
+   status('Unidade contabilizada. OCR indisponível; lote e fabricação ficaram pendentes de conferência.',true);
+   msg('Contagem registrada; OCR não conseguiu ler lote/fabricação.',true);
+  }finally{processingCodes.delete(code);}
+ })();
 }
 
 async function extractLabelDetails(){
@@ -287,14 +283,15 @@ async function extractLabelDetails(){
  if(ocrBusy) return {lot:'',date:''};
  ocrBusy=true;
  try{
-  if(!ocrWorker) ocrWorker=await Tesseract.createWorker('por+eng');
   const video=$('reader');
-  // Amplia a imagem para melhorar o reconhecimento de números pequenos na etiqueta.
+  if(!window.Tesseract || !video.srcObject || video.readyState<2 || !video.videoWidth) return {lot:'',date:''};
+  // Congela o quadro da etiqueta no instante da leitura, antes de iniciar o OCR.
   const scale=2;
   const canvas=document.createElement('canvas');
   canvas.width=video.videoWidth*scale; canvas.height=video.videoHeight*scale;
   const ctx=canvas.getContext('2d',{willReadFrequently:true});
   ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  if(!ocrWorker) ocrWorker=await Tesseract.createWorker('por+eng');
   const result=await ocrWorker.recognize(canvas);
   const raw=String(result.data.text||'');
   const text=raw.replace(/[|]/g,'1').replace(/\s+/g,' ');
@@ -320,27 +317,6 @@ async function extractLabelDetails(){
  } finally {ocrBusy=false;}
 }
 
-function saveNewProduct(){
- const item=pendingScan;
- if(!item){msg('Nenhuma leitura pendente para confirmar.',true);return;}
- // Revalidação imediatamente antes de gravar, evitando duplicidade por concorrência.
- if(item.code.length!==20 || item.sku!==item.code.slice(0,10) || item.serial!==item.code.slice(10)){
-  pendingScan=null;$('productModal').classList.remove('open');msg('Falha na validação do código. Leitura cancelada.',true);return;
- }
- if(!catalog[item.sku]){pendingScan=null;$('productModal').classList.remove('open');msg('SKU fora do catálogo. Leitura não contabilizada.',true);return;}
- if(records[item.sku]?.serials?.[item.serial]){pendingScan=null;$('productModal').classList.remove('open');msg('Duplicidade detectada na confirmação. Unidade não contabilizada.',true);return;}
- if(!records[item.sku])records[item.sku]={serials:{}};
- unitDetails[item.code]={lot:$('newLot').value.trim(),manufactureDate:$('newManufactureDate').value};
- pendingScan=null;$('productModal').classList.remove('open');
- registerValidSerial(item.sku,item.serial,item.code);
-}
-
-function cancelNewProduct(){
- pendingScan=null;
- $('productModal').classList.remove('open');
- status('Leitura cancelada. Nenhuma unidade foi contabilizada.', true);
-}
-
 function registerValidSerial(sku, serial, fullCode) {
  if(!records[sku]) {
   records[sku] = { serials: {} };
@@ -350,7 +326,7 @@ function registerValidSerial(sku, serial, fullCode) {
  render();
  playSuccessBeep();
  if(navigator.vibrate) navigator.vibrate(100);
- status('Leitura registrada com sucesso: ' + fullCode);
+ status('Leitura registrada automaticamente: ' + fullCode);
  msg('Produto adicionado: SKU ' + sku);
  autoSyncToCloud();
 }
@@ -495,9 +471,6 @@ async function stop(){
  $('start').disabled=false;$('stop').disabled=true;status('Câmera desligada.');
 }
 
-$('saveNewProduct').addEventListener('click',saveNewProduct);
-$('cancelNewProduct').addEventListener('click',cancelNewProduct);
-$('newMeasure').addEventListener('keydown',e=>{if(e.key==='Enter')saveNewProduct();});
 $('start').addEventListener('click',start);
 $('stop').addEventListener('click',stop);
 $('add').addEventListener('click',()=>{
